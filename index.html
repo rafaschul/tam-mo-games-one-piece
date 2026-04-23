@@ -7,12 +7,16 @@
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
   html,body{background:#0a0a0a;width:100%;height:100%;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;overflow:hidden;}
-  #wrap{display:flex;flex-direction:column;align-items:center;max-height:100vh;}
+    align-items:center;justify-content:center;overflow:hidden;
+    -webkit-user-select:none;user-select:none;}
+  #wrap{display:flex;flex-direction:column;align-items:center;max-height:100vh;width:100%;}
   canvas{display:block;image-rendering:pixelated;max-width:100vw;
-    max-height:calc(100vh - 28px);width:auto;height:auto;border:4px solid #1a1a1a;}
+    max-height:calc(100vh - 28px);width:auto;height:auto;border:4px solid #1a1a1a;
+    touch-action:none;-webkit-tap-highlight-color:transparent;}
   #cr{color:#555;font:10px Georgia,serif;letter-spacing:2px;text-transform:uppercase;
     margin-top:4px;white-space:nowrap;}
+  @media(max-width:600px){#cr{display:none;}
+    canvas{max-height:100vh;border-width:2px;}}
 </style>
 </head>
 <body>
@@ -66,7 +70,6 @@ function stopBGM(){if(bgInterval){clearInterval(bgInterval);bgInterval=null;}}
 
 // ── INPUT — jump uses edge detection to prevent held-key spam ────────
 const keys={},prev={};
-// jumpEdge: true only on the first frame the jump key is pressed
 let jumpEdge=false, jumpKeyHeld=false;
 
 document.addEventListener('keydown',e=>{
@@ -87,6 +90,82 @@ cv.addEventListener('click',e=>{
   const r=cv.getBoundingClientRect();
   handleClick((e.clientX-r.left)*(W/r.width),(e.clientY-r.top)*(H/r.height));
 });
+
+// ── MOBILE CONTROLS ──────────────────────────────────────────────────
+const joy={active:false,id:-1,bx:105,by:430,knobX:105,knobY:430,r:48,dead:10};
+const MBTNS={
+  jump:   {x:W-78, y:H-68, r:34,pressed:false,id:-1,label:'↑',  sub:'JUMP', col:'#27AE60',col2:'#145a2e'},
+  ability:{x:W-162,y:H-108,r:28,pressed:false,id:-1,label:'⚡', sub:'POWER',col:'#E74C3C',col2:'#7B241C'},
+  laser:  {x:W-78, y:H-138,r:28,pressed:false,id:-1,label:'✦',  sub:'LASER',col:'#FF8C00',col2:'#9a4d00'},
+};
+
+function cvPos(touch){
+  const r=cv.getBoundingClientRect();
+  return{x:(touch.clientX-r.left)*(W/r.width),y:(touch.clientY-r.top)*(H/r.height)};
+}
+function hitBtn(btn,x,y){const dx=x-btn.x,dy=y-btn.y;return dx*dx+dy*dy<(btn.r+14)*(btn.r+14);}
+
+cv.addEventListener('touchstart',e=>{
+  e.preventDefault();ensureAudio();startBGM();
+  Array.from(e.changedTouches).forEach(t=>{
+    const{x,y}=cvPos(t);
+    if(STATE!=='GAME'){handleClick(x,y);return;}
+    // Right side → buttons
+    if(x>W/2){
+      for(const[name,btn]of Object.entries(MBTNS)){
+        if(hitBtn(btn,x,y)){
+          btn.pressed=true;btn.id=t.identifier;
+          if(name==='jump'&&!jumpKeyHeld){jumpEdge=true;jumpKeyHeld=true;}
+          if(name==='ability')fireAbility();
+          if(name==='laser')fireLaser();
+          return;
+        }
+      }
+    }
+    // Left side → joystick
+    if(!joy.active){
+      joy.active=true;joy.id=t.identifier;
+      joy.bx=Math.max(joy.r+8,Math.min(W/2-joy.r,x));
+      joy.by=Math.max(joy.r+8,Math.min(H-8,y));
+      joy.knobX=joy.bx;joy.knobY=joy.by;
+    }
+  });
+},{passive:false});
+
+cv.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  Array.from(e.changedTouches).forEach(t=>{
+    const{x,y}=cvPos(t);
+    if(joy.active&&t.identifier===joy.id){
+      const dx=x-joy.bx,dy=y-joy.by;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const ang=Math.atan2(dy,dx);
+      const clamped=Math.min(dist,joy.r);
+      joy.knobX=joy.bx+Math.cos(ang)*clamped;
+      joy.knobY=joy.by+Math.sin(ang)*clamped;
+      if(dx>joy.dead){keys['ArrowRight']=true;keys['ArrowLeft']=false;}
+      else if(dx<-joy.dead){keys['ArrowLeft']=true;keys['ArrowRight']=false;}
+      else{keys['ArrowLeft']=false;keys['ArrowRight']=false;}
+    }
+    for(const[name,btn]of Object.entries(MBTNS)){
+      if(btn.id===t.identifier)btn.pressed=hitBtn(btn,x,y);
+    }
+  });
+},{passive:false});
+
+cv.addEventListener('touchend',e=>{
+  e.preventDefault();
+  Array.from(e.changedTouches).forEach(t=>{
+    if(joy.active&&t.identifier===joy.id){
+      joy.active=false;joy.id=-1;
+      joy.knobX=joy.bx;joy.knobY=joy.by;
+      keys['ArrowLeft']=false;keys['ArrowRight']=false;
+    }
+    for(const btn of Object.values(MBTNS)){
+      if(btn.id===t.identifier){btn.pressed=false;btn.id=-1;jumpKeyHeld=false;}
+    }
+  });
+},{passive:false});
 
 // ── CHARACTERS ───────────────────────────────────────────────────────
 const CHARS={
@@ -1667,6 +1746,67 @@ function drawOverlay(title,titleJP,col,msg){
   txt('© 2024 TAM MO GAMES',W/2,py+ph-12,10,'#aaa');
 }
 
+// ── MOBILE CONTROLS DRAW ────────────────────────────────────────────────
+function drawMobileControls(){
+  if(STATE!=='GAME')return;
+  ctx.save();
+
+  // ── Joystick ──
+  // Base ring
+  ctx.globalAlpha=.38;
+  ctx.strokeStyle='#fff';ctx.lineWidth=4;
+  ctx.beginPath();ctx.arc(joy.bx,joy.by,joy.r,0,Math.PI*2);ctx.stroke();
+  // Base fill
+  ctx.fillStyle='rgba(255,255,255,.12)';
+  ctx.beginPath();ctx.arc(joy.bx,joy.by,joy.r,0,Math.PI*2);ctx.fill();
+  // Arrow hints
+  ctx.globalAlpha=.28;ctx.fillStyle='#fff';ctx.font='bold 15px Georgia';ctx.textAlign='center';
+  ctx.fillText('◀',joy.bx-joy.r*.62,joy.by+5);
+  ctx.fillText('▶',joy.bx+joy.r*.62,joy.by+5);
+  // Knob shadow
+  ctx.globalAlpha=.25;ctx.fillStyle='#000';
+  ctx.beginPath();ctx.arc(joy.knobX+3,joy.knobY+4,20,0,Math.PI*2);ctx.fill();
+  // Knob gradient
+  ctx.globalAlpha=joy.active?.92:.72;
+  const kg=ctx.createRadialGradient(joy.knobX-6,joy.knobY-6,2,joy.knobX,joy.knobY,22);
+  kg.addColorStop(0,'#ffffff');kg.addColorStop(.5,'#d0d0d0');kg.addColorStop(1,'rgba(160,160,160,.8)');
+  ctx.fillStyle=kg;ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=2.5;
+  ctx.beginPath();ctx.arc(joy.knobX,joy.knobY,22,0,Math.PI*2);ctx.fill();ctx.stroke();
+  // Knob cross-hair
+  ctx.globalAlpha=.35;ctx.strokeStyle='#888';ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(joy.knobX-8,joy.knobY);ctx.lineTo(joy.knobX+8,joy.knobY);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(joy.knobX,joy.knobY-8);ctx.lineTo(joy.knobX,joy.knobY+8);ctx.stroke();
+
+  // ── Buttons ──
+  for(const[name,btn]of Object.entries(MBTNS)){
+    const p=btn.pressed,by2=btn.y+(p?3:0);
+    // Shadow
+    ctx.globalAlpha=.3;ctx.fillStyle='#000';
+    ctx.beginPath();ctx.arc(btn.x+3,by2+5,btn.r,0,Math.PI*2);ctx.fill();
+    // Outer ring
+    ctx.globalAlpha=p?.95:.7;
+    ctx.strokeStyle='rgba(255,255,255,.6)';ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.arc(btn.x,by2,btn.r+4,0,Math.PI*2);
+    ctx.strokeStyle=p?'rgba(255,255,255,.9)':btn.col;ctx.stroke();
+    // Body
+    const bg=ctx.createRadialGradient(btn.x-btn.r*.35,by2-btn.r*.35,2,btn.x,by2,btn.r);
+    bg.addColorStop(0,p?btn.col2:btn.col);bg.addColorStop(1,p?'#111':btn.col2);
+    ctx.fillStyle=bg;ctx.beginPath();ctx.arc(btn.x,by2,btn.r,0,Math.PI*2);ctx.fill();
+    // Inner highlight
+    ctx.fillStyle='rgba(255,255,255,.18)';
+    ctx.beginPath();ctx.arc(btn.x-btn.r*.25,by2-btn.r*.3,btn.r*.5,0,Math.PI*2);ctx.fill();
+    // Label
+    ctx.globalAlpha=1;ctx.fillStyle='#fff';ctx.shadowColor='rgba(0,0,0,.7)';ctx.shadowBlur=6;
+    ctx.textAlign='center';
+    ctx.font=`bold ${name==='jump'?20:16}px Georgia`;
+    ctx.fillText(btn.label,btn.x,by2+(name==='jump'?7:5));
+    ctx.font='bold 7px Georgia';ctx.letterSpacing='1px';
+    ctx.fillText(btn.sub,btn.x,by2+(name==='jump'?22:18));
+    ctx.shadowBlur=0;
+  }
+  ctx.globalAlpha=1;ctx.restore();
+}
+
 // ── MAIN LOOP ───────────────────────────────────────────────────────────
 function loop(){
   ctx.clearRect(0,0,W,H);
@@ -1675,7 +1815,7 @@ function loop(){
     case 'TITLE':    drawTitle();break;
     case 'SELECT':   drawSelect();break;
     case 'INTRO':    drawIntro();break;
-    case 'GAME':     drawGame();break;
+    case 'GAME':     drawGame();drawMobileControls();break;
     case 'GAMEOVER': drawGame();drawOverlay('GAME OVER','ゲームオーバー','#E74C3C','負けても立ち上がれ！');break;
     case 'WIN':      drawGame();drawOverlay('STAGE CLEAR!','ステージクリア！','#27AE60','仲間の力で勝利だ！');break;
   }
