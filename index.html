@@ -42,6 +42,17 @@ let audioCtx=null;
 function ensureAudio(){
   if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();
   if(audioCtx.state==='suspended')audioCtx.resume();
+  // Mobile unlock: play a silent 1-frame buffer to unblock iOS/Android audio
+  if(!audioCtx._unlocked){
+    audioCtx._unlocked=true;
+    try{
+      const buf=audioCtx.createBuffer(1,1,22050);
+      const src=audioCtx.createBufferSource();
+      src.buffer=buf;src.connect(audioCtx.destination);
+      src.start(0);
+      audioCtx.resume().then(()=>{if(bgInterval===null)startBGM();});
+    }catch(e){}
+  }
 }
 function beep(f,d,t='sine',v=0.3,delay=0){
   if(!audioCtx)return;
